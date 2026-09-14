@@ -1,15 +1,5 @@
-from fastapi.middleware.cors import CORSMiddleware
-app = FastAPI(...)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from database import supabase
 from schemas import (
     MeasurementCreate,
@@ -26,6 +16,16 @@ app = FastAPI(
     title="Energy Monitor API",
     description="Backend for ESP32 IoT Energy Monitoring System",
     version="1.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 

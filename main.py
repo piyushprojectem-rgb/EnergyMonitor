@@ -1,0 +1,353 @@
+import os
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from database import supabase
+from schemas import (
+    MeasurementCreate,
+    BatchMeasurementCreate
+)
+
+
+
+# ============================================================
+# APP
+# ============================================================
+
+app = FastAPI(
+    title="Energy Monitor API",
+    description="Backend for ESP32 IoT Energy Monitoring System",
+    version="1.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    # Frontend runs on Vercel; localhost is kept for local development.
+    # The frontend does not use browser cookie authentication.
+    allow_origins=[
+        "https://emfrontend-jam5.vercel.app",
+        "http://localhost:5173",
+    ],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+
+# ============================================================
+# RELAY CONTROL
+# ============================================================
+# Relay commands are now published directly by the React dashboard
+# to HiveMQ over MQTT WebSockets. FastAPI only handles measurement
+# storage and dashboard data retrieval.
+
+# ============================================================
+# ROOT
+# ============================================================
+
+@app.get("/")
+def root():
+
+    return {
+        "status": "ok",
+        "message": "Energy Monitor Backend is running"
+    }
+
+
+# ============================================================
+# LOADS
+# ============================================================
+
+@app.get("/loads")
+def get_loads():
+
+    response = (
+        supabase
+        .table("loads")
+        .select("*")
+        .order("channel")
+        .execute()
+    )
+
+    return response.data
+
+
+# ============================================================
+# CREATE SINGLE MEASUREMENT
+# ============================================================
+
+@app.post("/measurements")
+def create_measurement(
+    measurement: MeasurementCreate
+):
+
+    data = {
+        "load_id": measurement.load_id,
+        "timestamp": measurement.timestamp,
+        "voltage_v": measurement.voltage_v,
+        "current_a": measurement.current_a,
+        "power_w": measurement.power_w,
+        "power_factor": measurement.power_factor,
+        "relay_state": measurement.relay_state
+    }
+
+    response = (
+        supabase
+        .table("measurements")
+        .insert(data)
+        .execute()
+    )
+
+    if not response.data:
+
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to insert measurement"
+        )
+
+    return {
+        "status": "success",
+        "message": "Measurement stored",
+        "data": response.data[0]
+    }
+
+
+# ============================================================
+# CREATE BATCH MEASUREMENTS
+# ============================================================
+
+@app.post("/measurements/batch")
+def create_batch_measurements(
+    batch: BatchMeasurementCreate
+):
+
+    data = []
+
+    for measurement in batch.measurements:
+
+        data.append({
+            "load_id": measurement.load_id,
+            "timestamp": batch.timestamp,
+            "voltage_v": measurement.voltage_v,
+            "current_a": measurement.current_a,
+            "power_w": measurement.power_w,
+            "power_factor": measurement.power_factor,
+            "relay_state": measurement.relay_state
+        })
+
+    if not data:
+
+        raise HTTPException(
+            status_code=400,
+            detail="No measurements provided"
+        )
+
+    response = (
+        supabase
+        .table("measurements")
+        .insert(data)
+        .execute()
+    )
+
+    if not response.data:
+
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to insert measurements"
+        )
+
+    return {
+        "status": "success",
+        "message": f"{len(response.data)} measurements stored",
+        "data": response.data
+    }
+
+
+# ============================================================
+# LATEST MEASUREMENT FOR EACH LOAD
+# ============================================================
+
+@app.get("/measurements/latest")
+def get_latest_measurements():
+
+    latest = []
+
+    for load_id in [1, 2, 3]:
+
+        response = (
+            supabase
+            .table("measurements")
+            .select("*")
+            .eq("load_id", load_id)
+            .order("timestamp", desc=True)
+            .limit(1)
+            .execute()
+        )
+
+        if response.data:
+
+            latest.append(response.data[0])
+
+    return latest
+
+
+# ============================================================
+# MEASUREMENT HISTORY
+# ============================================================
+
+@app.get("/measurements/history")
+def get_measurement_history(
+    load_id: int | None = None,
+    limit: int = 100
+):
+
+    if limit < 1:
+        limit = 1
+
+    if limit > 1000:
+        limit = 1000
+
+    query = (
+        supabase
+        .table("measurements")
+        .select("*")
+        .order("timestamp", desc=True)
+        .limit(limit)
+    )
+
+    if load_id is not None:
+
+        if load_id < 1 or load_id > 3:
+
+            raise HTTPException(
+                status_code=400,
+                detail="load_id must be 1, 2, or 3"
+            )
+
+        query = query.eq("load_id", load_id)
+
+    response = query.execute()
+
+    return response.data
+
+
+# ============================================================
+# RELAY EVENT HISTORY
+# ============================================================
+
+@app.get("/relay-events")
+def get_relay_events(
+    load_id: int | None = None,
+    limit: int = 100
+):
+
+    if limit < 1:
+        limit = 1
+
+    if limit > 1000:
+        limit = 1000
+
+    query = (
+        supabase
+        .table("relay_events")
+        .select("*")
+        .order("timestamp", desc=True)
+        .limit(limit)
+    )
+
+    if load_id is not None:
+
+        if load_id < 1 or load_id > 3:
+
+            raise HTTPException(
+                status_code=400,
+                detail="load_id must be 1, 2, or 3"
+            )
+
+        query = query.eq("load_id", load_id)
+
+    response = query.execute()
+
+    return response.data
+
+
+# ============================================================
+# HOURLY ENERGY
+# ============================================================
+
+@app.get("/energy/hourly")
+def get_hourly_energy(
+    load_id: int | None = None,
+    limit: int = 24
+):
+
+    if limit < 1:
+        limit = 1
+
+    if limit > 1000:
+        limit = 1000
+
+    query = (
+        supabase
+        .table("energy_hourly")
+        .select("*")
+        .order("hour_start", desc=True)
+        .limit(limit)
+    )
+
+    if load_id is not None:
+
+        if load_id < 1 or load_id > 3:
+
+            raise HTTPException(
+                status_code=400,
+                detail="load_id must be 1, 2, or 3"
+            )
+
+        query = query.eq("load_id", load_id)
+
+    response = query.execute()
+
+    return response.data
+
+
+# ============================================================
+# DAILY ENERGY
+# ============================================================
+
+@app.get("/energy/daily")
+def get_daily_energy(
+    load_id: int | None = None,
+    limit: int = 30
+):
+
+    if limit < 1:
+        limit = 1
+
+    if limit > 1000:
+        limit = 1000
+
+    query = (
+        supabase
+        .table("energy_daily")
+        .select("*")
+        .order("day_date", desc=True)
+        .limit(limit)
+    )
+
+    if load_id is not None:
+
+        if load_id < 1 or load_id > 3:
+
+            raise HTTPException(
+                status_code=400,
+                detail="load_id must be 1, 2, or 3"
+            )
+
+        query = query.eq("load_id", load_id)
+
+    response = query.execute()
+
+    return response.data
+
+
